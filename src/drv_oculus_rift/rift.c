@@ -20,10 +20,14 @@
 #define KEEP_ALIVE_VALUE (10 * 1000)
 #define SETFLAG(_s, _flag, _val) (_s) = ((_s) & ~(_flag)) | ((_val) ? (_flag) : 0)
 
+#define OCULUS_VR_INC_ID 0x2833
+#define RIFT_ID_COUNT 4
+
 typedef struct {
 	ohmd_device base;
 
 	hid_device* handle;
+	hid_device* remote_handle;
 	pkt_sensor_range sensor_range;
 	pkt_sensor_display_info display_info;
 	rift_coordinate_frame coordinate_frame, hw_coordinate_frame;
@@ -155,7 +159,7 @@ static void update_device(ohmd_device* device)
 			LOGE("error reading from device");
 			return;
 		} else if(size == 0) {
-			return; // No more messages, return.
+			break; // No more messages, return.
 		}
 
 		// currently the only message type the hardware supports (I think)
@@ -163,6 +167,38 @@ static void update_device(ohmd_device* device)
 			handle_tracker_sensor_msg(priv, buffer, size);
 		}else{
 			LOGE("unknown message type: %u", buffer[0]);
+		}
+	}
+
+	if (!priv->remote_handle)
+		return;
+
+	while(true){
+		int size = hid_read(priv->remote_handle, buffer, FEATURE_BUFFER_SIZE);
+		if(size < 0){
+			LOGE("error reading from remote device");
+			return;
+		} else if(size == 0) {
+			break; // No more messages, return.
+		}
+
+
+		// Oculus:   80 00
+		// Minus:    40 00
+		// Plus:     20 00
+		// Return:   00 01
+		// Middle:   10 00
+		// Up:       01 00
+		// Bottom:   02 00
+		// Left:     04 00
+		// Right:    08 00
+		//TODO: check if the 0xd messages are sent by the remote
+		if (buffer[0] == 0xc)
+		{
+			LOGE("unknown message type: %u", buffer[0]);
+			for (int i =0; i < size; i++)
+			  printf("%02x ", buffer[i]);
+			printf("\n");
 		}
 	}
 }
@@ -229,17 +265,61 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 	priv->base.ctx = driver->ctx;
 
 	// Open the HID device
-	priv->handle = hid_open_path(desc->path);
+	priv->handle = NULL;
+	priv->remote_handle = NULL;
 
-	if(!priv->handle) {
-		char* path = _hid_to_unix_path(desc->path);
-		ohmd_set_error(driver->ctx, "Could not open %s. "
-		                            "Check your rights.", path);
-		free(path);
+	// If CV1, open both HMD and remote interfaces
+	if (desc->revision == REV_CV1)
+	{
+		// Retrieve serial number
+		hid_device* dev = hid_open_path(desc->path);
+		if (!dev)
+			goto cleanup;
+		wchar_t serial_number[OHMD_STR_SIZE];
+		if (hid_get_serial_number_string(dev, serial_number, OHMD_STR_SIZE) == -1)
+			priv->handle = dev;
+		else {
+			hid_close(dev);
+
+			struct hid_device_info* devs = hid_enumerate(OCULUS_VR_INC_ID, 0x0031 /* TODO */);
+			struct hid_device_info* cur_dev = devs;
+
+			if(devs == NULL)
+				goto cleanup;
+
+			while (cur_dev) {
+				if (cur_dev->serial_number != NULL && wcscmp(cur_dev->serial_number, serial_number) == 0)
+				{
+					if (cur_dev->interface_number == 0)
+					{
+						printf("Path / Path: %s        %s\n", cur_dev->path, desc->path);
+						priv->handle = hid_open_path(cur_dev->path);
+					}
+					else if (cur_dev->interface_number == 1)
+						priv->remote_handle = hid_open_path(cur_dev->path);
+				}
+
+				cur_dev = cur_dev->next;
+			}
+
+			hid_free_enumeration(devs);
+		}
+	}
+	else
+	{
+		priv->handle = hid_open_path(desc->path);
+		priv->remote_handle = NULL;
+	}
+
+	if (!priv->handle)
+		goto cleanup;
+
+	if(hid_set_nonblocking(priv->handle, 1) == -1){
+		ohmd_set_error(driver->ctx, "failed to set non-blocking on device");
 		goto cleanup;
 	}
 
-	if(hid_set_nonblocking(priv->handle, 1) == -1){
+	if(priv->remote_handle && hid_set_nonblocking(priv->remote_handle, 1) == -1){
 		ohmd_set_error(driver->ctx, "failed to set non-blocking on device");
 		goto cleanup;
 	}
@@ -328,9 +408,6 @@ cleanup:
 
 	return NULL;
 }
-
-#define OCULUS_VR_INC_ID 0x2833
-#define RIFT_ID_COUNT 4
 
 static void get_device_list(ohmd_driver* driver, ohmd_device_list* list)
 {
