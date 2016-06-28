@@ -134,6 +134,23 @@ static void handle_tracker_sensor_msg(rift_priv* priv, unsigned char* buffer, in
 	}
 }
 
+static void handle_remote_controller_msg(rift_priv* priv, unsigned char* buffer, int size)
+{
+	//TODO
+	// example packet: 0c 00 00 05 00 01 00 00
+	// Supposed: 05 is battery level, 01 00 some identifier, then button
+	// states as following:
+	// Oculus/Home:  80 00
+	// Volume down:  40 00
+	// Volume up:    20 00
+	// Back/Cancel:  00 01
+	// Select:       10 00
+	// Up:           01 00
+	// Bottom:       02 00
+	// Left:         04 00
+	// Right:        08 00
+}
+
 static void update_device(ohmd_device* device)
 {
 	rift_priv* priv = rift_priv_get(device);
@@ -182,23 +199,10 @@ static void update_device(ohmd_device* device)
 			break; // No more messages, return.
 		}
 
-
-		// Oculus:   80 00
-		// Minus:    40 00
-		// Plus:     20 00
-		// Return:   00 01
-		// Middle:   10 00
-		// Up:       01 00
-		// Bottom:   02 00
-		// Left:     04 00
-		// Right:    08 00
-		//TODO: check if the 0xd messages are sent by the remote
-		if (buffer[0] == 0xc)
-		{
+		if (buffer[0] == RIFT_REMOTE_IRQ_CONTROLLER) {
+			handle_remote_controller_msg(priv, buffer, size);
+		}else{
 			LOGE("unknown message type: %u", buffer[0]);
-			for (int i =0; i < size; i++)
-			  printf("%02x ", buffer[i]);
-			printf("\n");
 		}
 	}
 }

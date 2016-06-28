@@ -33,6 +33,10 @@ typedef enum {
 } rift_irq_cmd;
 
 typedef enum {
+	RIFT_REMOTE_IRQ_CONTROLLER = 12,
+} rift_remoteirq_cmd;
+
+typedef enum {
 	RIFT_DT_NONE,
 	RIFT_DT_SCREEN_ONLY,
 	RIFT_DT_DISTORTION
